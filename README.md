@@ -1,4 +1,4 @@
-```markdown
+
 # GFS2 Cluster Storage
 
 ## Описание проекта

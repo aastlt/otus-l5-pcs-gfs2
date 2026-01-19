@@ -53,6 +53,9 @@ vagrant up
 
 Ansible запустится автоматически по завершении поднятия `gfs2-node-03`.
 
+<img width="1046" height="228" alt="Запуск" src="https://github.com/user-attachments/assets/05e689ba-af0c-4d2c-b1af-0a055b2e1164" />
+
+
 ### Ручная проверка (если требуется):
 
 ```bash
@@ -69,6 +72,9 @@ ansible-playbook -i inventory site.yml
 vagrant ssh gfs2-node-01 -c "sudo pcs status"
 ```
 
+<img width="1115" height="456" alt="Статус кластера" src="https://github.com/user-attachments/assets/4003ab5a-5b44-48b4-adc4-e18698febacd" />
+
+
 Ожидаемый результат: `dlm-clone` и `shared_fs-clone` должны быть в статусе `Started` на всех трёх узлах.
 
 2. **Проверка монтирования**:
@@ -76,6 +82,9 @@ vagrant ssh gfs2-node-01 -c "sudo pcs status"
 ```bash
 vagrant ssh gfs2-node-02 -c "df -h /mnt/shared"
 ```
+
+<img width="1131" height="116" alt="Монтирование" src="https://github.com/user-attachments/assets/4bef9a61-fd83-4901-a59b-937c9ed2c374" />
+
 
 3. **Тест совместного доступа**:
 
@@ -88,6 +97,9 @@ vagrant ssh gfs2-node-01 -c "echo 'Hello from Node 1' | sudo tee /mnt/shared/tes
 # Чтение на третьей ноде
 vagrant ssh gfs2-node-03 -c "cat /mnt/shared/test.txt"
 ```
+
+<img width="939" height="135" alt="Тест совместного доступа" src="https://github.com/user-attachments/assets/21ae991c-b8a4-4909-be68-fa2592a3a99e" />
+
 
 ## Удаление стенда
 

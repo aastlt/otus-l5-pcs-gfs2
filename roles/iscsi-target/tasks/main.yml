@@ -1,0 +1,77 @@
+---
+- name: Prevent Interactive Prompts And Install Target Services
+  block:
+    - name: Create Policy-rc.d To Prevent Service Start During Install
+      ansible.builtin.copy:
+        content: "exit 101"
+        dest: /usr/sbin/policy-rc.d
+        mode: '0755'
+
+    - name: Install Targetcli-fb
+      ansible.builtin.apt:
+        name: targetcli-fb
+        state: present
+        update_cache: true
+        install_recommends: false
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: apt_res
+      until: apt_res is success
+      retries: 5
+      delay: 10
+
+    - name: Remove Policy-rc.d
+      ansible.builtin.file:
+        path: /usr/sbin/policy-rc.d
+        state: absent
+
+- name: Install Target Services
+  ansible.builtin.apt:
+    name: targetcli-fb
+    state: present
+    update_cache: true
+  register: apt_res
+  until: apt_res is success
+  retries: 5
+  delay: 5
+
+- name: Configure LIO Target
+  block:
+    - name: Check If Backstore Exists
+      ansible.builtin.shell: |
+        set -o pipefail
+        targetcli /backstores/block ls | grep -q 'shared_disk'
+      args:
+        executable: /bin/bash
+      register: backstore_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create Backstore
+      ansible.builtin.command:
+        cmd: "targetcli /backstores/block create name=shared_disk dev=/dev/sdb"
+      when: backstore_check.rc != 0
+      changed_when: true
+
+    - name: Create Target IQN
+      ansible.builtin.command: "targetcli /iscsi create iqn.2026-01.local.storage:shared"
+      register: target_out
+      failed_when: "target_out.rc != 0 and 'already exists' not in target_out.stderr"
+      changed_when: "target_out.rc == 0"
+
+    - name: Create LUN
+      ansible.builtin.command: "targetcli /iscsi/iqn.2026-01.local.storage:shared/tpg1/luns create /backstores/block/shared_disk"
+      register: lun_out
+      failed_when: "lun_out.rc != 0 and 'already exists' not in lun_out.stderr"
+      changed_when: "lun_out.rc == 0"
+
+    - name: Create Node ACLs
+      ansible.builtin.command: "targetcli /iscsi/iqn.2026-01.local.storage:shared/tpg1/acls create iqn.2026-01.local.node:0{{ item }}"
+      loop: [1, 2, 3]
+      register: acl_out
+      failed_when: "acl_out.rc != 0 and 'already exists' not in acl_out.stderr"
+      changed_when: "acl_out.rc == 0"
+
+    - name: Save Config
+      ansible.builtin.command: "targetcli saveconfig"
+      changed_when: false

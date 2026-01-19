@@ -1,0 +1,36 @@
+totem {
+    version: 2
+    cluster_name: my_cluster
+    transport: knet
+    crypto_cipher: none
+    crypto_hash: none
+}
+
+nodelist {
+    node {
+        ring0_addr: 192.168.56.11
+        nodeid: 1
+        name: gfs2-node-01
+    }
+    node {
+        ring0_addr: 192.168.56.12
+        nodeid: 2
+        name: gfs2-node-02
+    }
+    node {
+        ring0_addr: 192.168.56.13
+        nodeid: 3
+        name: gfs2-node-03
+    }
+}
+
+quorum {
+    provider: corosync_votequorum
+    two_node: 0
+}
+
+logging {
+    to_logfile: yes
+    logfile: /var/log/corosync/corosync.log
+    to_syslog: yes
+}

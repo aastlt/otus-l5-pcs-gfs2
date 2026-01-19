@@ -1,0 +1,12 @@
+---
+- name: Configure ISCSI Target
+  hosts: storage
+  become: true
+  roles:
+    - iscsi-target
+
+- name: Configure GFS2 Cluster
+  hosts: nodes
+  become: true
+  roles:
+    - gfs2-cluster

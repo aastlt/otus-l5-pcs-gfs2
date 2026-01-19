@@ -1,0 +1,26 @@
+# Vagrant
+.vagrant/
+
+# Ansible
+*.retry
+*.log
+.ansible/
+.ansible_cache/
+.ansible-lint
+
+# Python (если используются кастомные скрипты или фильтры)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# SSH Keys (если генерировались для кластера)
+roles/gfs2-cluster/files/id_rsa*
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# VirtualBox logs and temporary files
+*.vbox
+*.vbox-prev

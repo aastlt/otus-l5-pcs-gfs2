@@ -1,0 +1,16 @@
+---
+- name: Restart Open-iscsi
+  ansible.builtin.systemd:
+    name: open-iscsi
+    state: restarted
+
+- name: Restart Corosync
+  ansible.builtin.systemd:
+    name: corosync
+    state: restarted
+  notify: Restart Pacemaker
+
+- name: Restart Pacemaker
+  ansible.builtin.systemd:
+    name: pacemaker
+    state: restarted

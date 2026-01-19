@@ -1,0 +1,238 @@
+---
+# БЛОК 1: Подготовка APT и системная изоляция
+- name: Prevent Apt From Hanging
+  block:
+    - name: Disable Apt Daily Services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [apt-daily.timer, apt-daily-upgrade.timer]
+      failed_when: false
+
+    - name: Force Ipv4 For All Nodes
+      ansible.builtin.copy:
+        content: 'Acquire::ForceIPv4 "true";'
+        dest: /etc/apt/apt.conf.d/99force-ipv4
+        mode: '0644'
+
+    - name: Set Installation Policy
+      ansible.builtin.copy:
+        content: "exit 101"
+        dest: /usr/sbin/policy-rc.d
+        mode: '0755'
+
+    - name: Install Essential Packages
+      ansible.builtin.apt:
+        name:
+          - pcs
+          - pacemaker
+          - dlm-controld
+          - gfs2-utils
+          - lvm2-lockd
+          - sanlock
+          - open-iscsi
+        state: present
+        update_cache: true
+
+- name: Remove Installation Policy
+  ansible.builtin.file:
+    path: /usr/sbin/policy-rc.d
+    state: absent
+
+# БЛОК 2: Сеть и iSCSI логин
+- name: Configure Network Resolution
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+  loop: "{{ groups['nodes'] }}"
+
+- name: Setup Iscsi Initiator
+  block:
+    - name: Push Initiator Name
+      ansible.builtin.template:
+        src: initiatorname.iscsi.j2
+        dest: /etc/iscsi/initiatorname.iscsi
+        mode: '0644'
+      notify: Restart Open-iscsi
+
+    - name: Flush Handlers To Apply IQN
+      ansible.builtin.meta: flush_handlers
+
+    - name: Login To Iscsi Target
+      ansible.builtin.shell: |
+        set -o pipefail
+        iscsiadm -m discovery -t st -p 192.168.56.10 && \
+        iscsiadm -m node -T iqn.2026-01.local.storage:shared -p 192.168.56.10 --login
+      args:
+        executable: /bin/bash
+      register: iscsi_res
+      changed_when: "'successful' in iscsi_res.stdout"
+      failed_when: "iscsi_res.rc != 0 and iscsi_res.rc != 15"
+
+# БЛОК 3: LVM на общем диске (Выполняется один раз)
+- name: Setup Shared Lvm
+  delegate_to: gfs2-node-01
+  run_once: true
+  block:
+    - name: Create Volume Group
+      community.general.lvg:
+        vg: vg_shared
+        pvs: /dev/disk/by-path/ip-192.168.56.10:3260-iscsi-iqn.2026-01.local.storage:shared-lun-0
+        state: present
+
+    - name: Create Logical Volume
+      community.general.lvol:
+        vg: vg_shared
+        lv: lv_shared
+        size: 100%VG
+        state: present
+
+- name: Scan Lvm On All Nodes
+  ansible.builtin.command: "{{ item }}"
+  loop: [pvscan, vgscan, lvscan]
+  changed_when: false
+
+- name: Activate shared LVM volumes globally
+  ansible.builtin.shell: "vgchange -ay vg_shared"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['nodes'] }}"
+  run_once: true
+  register: vg_act
+  changed_when: "'1 logical volume(s) in volume group' in vg_act.stdout"
+
+# БЛОК 4: Ручная настройка кластера (Direct Config)
+- name: Deploy Corosync Configuration
+  block:
+    - name: Push Corosync Config Template
+      ansible.builtin.template:
+        src: corosync.conf.j2
+        dest: /etc/corosync/corosync.conf
+        mode: '0644'
+      notify: Restart Corosync
+
+    - name: Ensure Cluster Services Are Enabled
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop: [corosync, pacemaker]
+
+- name: Flush Handlers To Start Cluster
+  ansible.builtin.meta: flush_handlers
+
+- name: Finalize Cluster Properties
+  delegate_to: gfs2-node-01
+  run_once: true
+  block:
+    - name: Wait For Quorum
+      ansible.builtin.command: "pcs status quorum"
+      register: quorum_check
+      until: quorum_check.rc == 0
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Disable Stonith For Lab
+      ansible.builtin.command: "pcs property set stonith-enabled=false"
+      changed_when: true
+
+# БЛОК 5: Подготовка среды (На всех нодах)
+- name: Prepare DLM and LVM environment on all nodes
+  ansible.builtin.shell: |
+    set -e
+    set -o pipefail
+    modprobe dlm
+    # 1. Configfs для DLM
+    if ! mountpoint -q /sys/kernel/config; then
+      mount -t configfs configfs /sys/kernel/config
+    fi
+    # 2. Маскировка dlm.service
+    systemctl mask dlm.service
+    # 3. Настройка lvmlockd (Debian 12)
+    sed -i 's/use_lvmlockd = 0/use_lvmlockd = 1/' /etc/lvm/lvm.conf
+    # Проверка наличия сервиса перед включением
+    if systemctl list-unit-files | grep -q lvmlockd.service; then
+        systemctl enable --now lvmlockd
+    fi
+    systemctl restart pcsd
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+# БЛОК 6: Ресурсы (Только на node-01)
+- name: Setup Cluster Resources
+  delegate_to: gfs2-node-01
+  run_once: true
+  block:
+    - name: Disable STONITH
+      ansible.builtin.command: "pcs property set stonith-enabled=false"
+      register: stonith_res
+      changed_when: "'stonith-enabled: false' not in stonith_res.stdout and stonith_res.rc == 0"
+      failed_when: false
+
+    - name: Create DLM Resource
+      ansible.builtin.command: >
+        pcs resource create dlm ocf:pacemaker:controld
+        allow_stonith_disabled=true
+        op monitor interval=30s
+        clone interleave=true
+      register: dlm_out
+      failed_when: "dlm_out.rc != 0 and 'already exists' not in dlm_out.stderr"
+      changed_when: "dlm_out.rc == 0"
+
+    - name: Wait for DLM to be ACTIVE
+      ansible.builtin.command: "pcs status"
+      register: cluster_status
+      until: "cluster_status.stdout is search('Started: \\[ gfs2-node-01 gfs2-node-02 gfs2-node-03 \\]')"
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: Check For Filesystem Signature
+      ansible.builtin.command: "blkid /dev/vg_shared/lv_shared"
+      register: blkid_res
+      failed_when: false
+      changed_when: false
+
+    - name: Format GFS2 Filesystem
+      ansible.builtin.command:
+        cmd: "mkfs.gfs2 -p lock_dlm -t my_cluster:shared -j 3 -O /dev/vg_shared/lv_shared"
+      delegate_to: gfs2-node-01
+      run_once: true
+      when: blkid_res.rc != 0
+      register: mkfs_output
+      changed_when: "mkfs_output.rc == 0"
+
+    - name: Create GFS2 Resource
+      ansible.builtin.command: >
+        pcs resource create shared_fs ocf:heartbeat:Filesystem
+        device='/dev/vg_shared/lv_shared' directory='/mnt/shared'
+        fstype='gfs2' options='noatime'
+        op monitor interval=20s clone interleave=true
+      register: fs_out
+      changed_when: "fs_out.rc == 0"
+      failed_when: "fs_out.rc != 0 and 'already exists' not in fs_out.stderr"
+
+    - name: Check Constraints Status
+      ansible.builtin.command: "pcs constraint list --full"
+      register: constraint_list
+      changed_when: false
+
+    - name: Set Constraints
+      ansible.builtin.command: "{{ item.cmd }}"
+      when: item.search not in constraint_list.stdout
+      loop:
+        - { cmd: "pcs constraint colocation add shared_fs-clone with dlm-clone", search: "colocation: shared_fs-clone with dlm-clone" }
+        - { cmd: "pcs constraint order start dlm-clone then start shared_fs-clone", search: "order: start dlm-clone then start shared_fs-clone" }
+      register: constraint_result
+      changed_when: "constraint_result is not skipped"
+
+- name: Ensure Mount Point Directory
+  ansible.builtin.file:
+    path: /mnt/shared
+    state: directory
+    mode: '0755'

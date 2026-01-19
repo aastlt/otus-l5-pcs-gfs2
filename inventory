@@ -1,0 +1,12 @@
+[storage]
+iscsi-target ansible_host=192.168.56.10
+
+[nodes]
+gfs2-node-01 ansible_host=192.168.56.11
+gfs2-node-02 ansible_host=192.168.56.12
+gfs2-node-03 ansible_host=192.168.56.13
+
+[all:vars]
+ansible_user=vagrant
+ansible_ssh_private_key_file={{ playbook_dir }}/.vagrant/machines/{{ inventory_hostname }}/virtualbox/private_key
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'

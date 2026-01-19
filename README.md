@@ -72,10 +72,10 @@ ansible-playbook -i inventory site.yml
 vagrant ssh gfs2-node-01 -c "sudo pcs status"
 ```
 
+Ожидаемый результат: `dlm-clone` и `shared_fs-clone` должны быть в статусе `Started` на всех трёх узлах.
+
 <img width="1115" height="456" alt="Статус кластера" src="https://github.com/user-attachments/assets/4003ab5a-5b44-48b4-adc4-e18698febacd" />
 
-
-Ожидаемый результат: `dlm-clone` и `shared_fs-clone` должны быть в статусе `Started` на всех трёх узлах.
 
 2. **Проверка монтирования**:
 
